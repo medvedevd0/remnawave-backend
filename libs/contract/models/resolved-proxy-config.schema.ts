@@ -93,7 +93,6 @@ export const HysteriaTransportOptionsSchema = z.object({
 export const TlsSecurityOptionsSchema = z.object({
     pinnedPeerCertSha256: z.string().nullable(),
     verifyPeerCertByName: z.string().nullable(),
-    mihomoIpVersion: z.nativeEnum(MIHOMO_IP_VERSION).nullable(),
     alpn: z.string().nullable(),
     enableSessionResumption: z.boolean(),
     fingerprint: z.string().nullable(),
@@ -255,6 +254,7 @@ export const ResolvedProxyConfigSchema = z.object({
     clientOverrides: z.object({
         shuffleHost: z.boolean(),
         mihomoX25519: z.boolean(),
+        mihomoIpVersion: z.nativeEnum(MIHOMO_IP_VERSION).nullable(),
         serverDescription: z.string().nullable(),
         xrayJsonTemplate: z.nullable(z.unknown()),
     }),

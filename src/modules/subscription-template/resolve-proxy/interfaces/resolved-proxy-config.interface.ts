@@ -217,9 +217,9 @@ export type ResolvedProxyConfig = {
     clientOverrides: {
         shuffleHost: boolean;
         mihomoX25519: boolean;
+        mihomoIpVersion: TMihomoIpVersion | null;
         serverDescription: string | null;
         xrayJsonTemplate: object | null;
-        mihomoIpVersion: TMihomoIpVersion | null;
     };
 
     metadata: IProxyEntryMetadata;

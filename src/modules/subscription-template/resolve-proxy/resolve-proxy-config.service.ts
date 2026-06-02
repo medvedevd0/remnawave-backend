@@ -558,6 +558,7 @@ export class ResolveProxyConfigService {
             clientOverrides: {
                 shuffleHost: inputHost.shuffleHost,
                 mihomoX25519: inputHost.mihomoX25519,
+                mihomoIpVersion: inputHost.mihomoIpVersion,
                 serverDescription: inputHost.serverDescription
                     ? Buffer.from(inputHost.serverDescription).toString('base64')
                     : null,
@@ -674,6 +675,7 @@ export class ResolveProxyConfigService {
                         mihomoX25519: false,
                         serverDescription: null,
                         xrayJsonTemplate: null,
+                        mihomoIpVersion: null,
                     },
                     metadata: {
                         uuid: '00000000-0000-0000-0000-000000000000',
