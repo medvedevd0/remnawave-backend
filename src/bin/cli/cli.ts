@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import customParseFormat from 'dayjs/plugin/customParseFormat';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { PrismaClient } from '@prisma/client';
 import timezone from 'dayjs/plugin/timezone';
@@ -16,6 +17,7 @@ import { CACHE_KEYS } from '@libs/contracts/constants';
 dayjs.extend(utc);
 dayjs.extend(relativeTime);
 dayjs.extend(timezone);
+dayjs.extend(customParseFormat);
 
 const prisma = new PrismaClient({
     datasources: {
@@ -40,6 +42,7 @@ const redis = new Redis({
 });
 
 const enum CLI_ACTIONS {
+    DELETE_USERS_USAGE_BY_DATE_RANGE = 'delete-users-usage-by-date-range',
     ENABLE_PASSWORD_AUTH = 'enable-password-auth',
     EXIT = 'exit',
     GET_SECRET_KEY_FOR_NODE = 'get-secret-key-for-node',
@@ -49,6 +52,8 @@ const enum CLI_ACTIONS {
     TRUNCATE_SRH_TABLE = 'truncate-srh-table',
     TRUNCATE_USERS_USAGE_TABLE = 'truncate-users-usage-table',
 }
+
+const DATE_INPUT_FORMAT = 'DD-MM-YYYY';
 
 async function checkDatabaseConnection() {
     try {
@@ -290,6 +295,271 @@ async function truncateUsersUsageTable() {
     }
 }
 
+type DeleteMethod = 'batched' | 'single';
+
+async function promptStrictDate(label: string, example: string): Promise<dayjs.Dayjs> {
+    const input = await consola.prompt(
+        `Enter the ${label} date in strict format day-month-year (${DATE_INPUT_FORMAT}), e.g. ${example}:`,
+        {
+            type: 'text',
+            placeholder: DATE_INPUT_FORMAT,
+            required: true,
+        },
+    );
+
+    const date = dayjs(input, DATE_INPUT_FORMAT, true);
+    if (!date.isValid()) {
+        consola.error(
+            `❌ Invalid ${label} date. Expected strict format ${DATE_INPUT_FORMAT}, e.g. ${example}.`,
+        );
+        process.exit(1);
+    }
+
+    return date;
+}
+
+function renderDeleteProgress(
+    current: number,
+    total: number,
+    startedAt: number,
+    lastBatchMs: number,
+): void {
+    const ratio = total > 0 ? Math.min(current / total, 1) : 1;
+    const width = 28;
+    const filled = Math.round(ratio * width);
+    const bar = '█'.repeat(filled) + '░'.repeat(width - filled);
+    const pct = `${(ratio * 100).toFixed(1)}%`.padStart(6);
+
+    const elapsedMs = Date.now() - startedAt;
+    const elapsedSec = (elapsedMs / 1000).toFixed(1);
+    const etaSec =
+        current > 0 ? (((elapsedMs / current) * (total - current)) / 1000).toFixed(1) : '—';
+
+    const line =
+        `  [${bar}] ${pct}  ` +
+        `${current.toLocaleString('en-US')}/${total.toLocaleString('en-US')}  ` +
+        `| ${elapsedSec}s elapsed | ETA ${etaSec}s | last ${lastBatchMs}ms | do NOT close`;
+
+    if (process.stdout.isTTY) {
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+        process.stdout.write(line);
+    } else {
+        consola.log(line.trim());
+    }
+}
+
+async function runBatchedDelete(
+    startStr: string,
+    endStr: string,
+    batchSize: number,
+    totalToDelete: number,
+    startedAt: number,
+): Promise<number> {
+    let totalDeleted = 0;
+    const timings: number[] = [];
+
+    consola.start('🔄 Deleting records in batches... (do NOT close this window)');
+
+    for (;;) {
+        const batchStart = Date.now();
+        const deleted = await prisma.$executeRaw`
+            DELETE FROM nodes_user_usage_history
+            WHERE ctid IN (
+                SELECT ctid
+                FROM nodes_user_usage_history
+                WHERE created_at >= ${startStr}::date
+                  AND created_at <= ${endStr}::date
+                LIMIT ${batchSize}
+            )
+        `;
+        const batchMs = Date.now() - batchStart;
+
+        if (deleted === 0) {
+            break;
+        }
+
+        totalDeleted += deleted;
+        timings.push(batchMs);
+
+        renderDeleteProgress(totalDeleted, totalToDelete, startedAt, batchMs);
+    }
+
+    if (process.stdout.isTTY) {
+        process.stdout.write('\n');
+    }
+
+    if (timings.length > 0) {
+        const first = timings[0];
+        const last = timings[timings.length - 1];
+        const min = Math.min(...timings);
+        const max = Math.max(...timings);
+        const avg = Math.round(timings.reduce((a, b) => a + b, 0) / timings.length);
+
+        consola.box(
+            `Batched delete summary\n` +
+                `batches:            ${timings.length}\n` +
+                `batch size:         ${batchSize.toLocaleString('en-US')}\n` +
+                `deleted total:      ${totalDeleted.toLocaleString('en-US')}\n` +
+                `first / avg / last: ${first} / ${avg} / ${last} ms\n` +
+                `min / max:          ${min} / ${max} ms`,
+        );
+    }
+
+    return totalDeleted;
+}
+
+async function runSingleDelete(startStr: string, endStr: string): Promise<number> {
+    consola.start('🔄 Deleting records... (do NOT close this window)');
+
+    const deleted = await prisma.$executeRaw`
+        DELETE FROM nodes_user_usage_history
+        WHERE created_at >= ${startStr}::date
+          AND created_at <= ${endStr}::date
+    `;
+
+    consola.success(`✅ Deleted ${deleted.toLocaleString('en-US')} record(s).`);
+
+    return deleted;
+}
+
+async function deleteUsersUsageByDateRange() {
+    consola.info(
+        'This will permanently delete users traffic statistics (nodes_user_usage_history) for the selected date range.',
+    );
+
+    const method = (await consola.prompt('Select deletion method', {
+        type: 'select',
+        required: true,
+        options: [
+            {
+                value: 'single',
+                label: 'Single query (fast)',
+                hint: 'One DELETE — fastest overall, but holds one longer lock',
+            },
+            {
+                value: 'batched',
+                label: 'Batched (low-lock + progress bar)',
+                hint: 'Many small DELETEs — shorter locks, live progress, slower overall',
+            },
+        ],
+        initial: 'single',
+    })) as DeleteMethod;
+
+    const startDate = await promptStrictDate('START', '01-01-2024');
+    const endDate = await promptStrictDate('END', '31-12-2024');
+
+    if (endDate.isBefore(startDate)) {
+        consola.error('❌ END date can not be earlier than START date.');
+        process.exit(1);
+    }
+
+    let batchSize = 0;
+    if (method === 'batched') {
+        const batchSizeInput = await consola.prompt('Batch size (rows per DELETE):', {
+            type: 'text',
+            placeholder: '50000',
+            default: '50000',
+            required: true,
+        });
+
+        batchSize = Number.parseInt(batchSizeInput, 10);
+        if (!Number.isInteger(batchSize) || batchSize <= 0) {
+            consola.error('❌ Invalid batch size. Expected a positive integer.');
+            process.exit(1);
+        }
+    }
+
+    const startStr = startDate.format('YYYY-MM-DD');
+    const endStr = endDate.format('YYYY-MM-DD');
+
+    consola.start('🔍 Counting affected rows...');
+
+    let rowsToDelete = 0n;
+    try {
+        const countResult = await prisma.$queryRaw<{ count: bigint }[]>`
+            SELECT COUNT(*)::bigint AS count
+            FROM nodes_user_usage_history
+            WHERE created_at >= ${startStr}::date
+              AND created_at <= ${endStr}::date
+        `;
+        rowsToDelete = countResult[0]?.count ?? 0n;
+    } catch (error) {
+        consola.error('❌ Failed to count rows:', error);
+        process.exit(1);
+    }
+
+    if (rowsToDelete === 0n) {
+        consola.info(
+            `ℹ️ No records found between ${startStr} and ${endStr} (inclusive). Nothing to delete.`,
+        );
+        process.exit(0);
+    }
+
+    consola.box(
+        `About to delete ${rowsToDelete.toLocaleString('en-US')} record(s)\n` +
+            `from ${startStr} to ${endStr} (inclusive)\n` +
+            `from table "nodes_user_usage_history" ` +
+            (method === 'batched'
+                ? `in batches of ${batchSize.toLocaleString('en-US')}.`
+                : `in a single query.`),
+    );
+
+    consola.warn(
+        'Do NOT close this window until the operation is finished.\n' +
+            'A final VACUUM runs at the end to reclaim space.\n' +
+            'Interrupting the operation may leave the table bloated.',
+    );
+
+    const answer = await consola.prompt(
+        `Are you sure you want to permanently delete these ${rowsToDelete.toLocaleString('en-US')} record(s)?`,
+        {
+            type: 'confirm',
+            required: true,
+        },
+    );
+
+    if (!answer) {
+        consola.error('❌ Aborted.');
+        process.exit(1);
+    }
+
+    const startedAt = Date.now();
+    let totalDeleted = 0;
+
+    try {
+        totalDeleted =
+            method === 'batched'
+                ? await runBatchedDelete(
+                      startStr,
+                      endStr,
+                      batchSize,
+                      Number(rowsToDelete),
+                      startedAt,
+                  )
+                : await runSingleDelete(startStr, endStr);
+    } catch (error) {
+        if (process.stdout.isTTY) {
+            process.stdout.write('\n');
+        }
+        consola.error('❌ Failed to delete records:', error);
+        process.exit(1);
+    }
+
+    consola.start('🧹 Reclaiming space (VACUUM)... (do NOT close this window)');
+    try {
+        await prisma.$executeRaw`VACUUM nodes_user_usage_history;`;
+    } catch (error) {
+        consola.warn('⚠️ Final VACUUM failed (table left as-is):', error);
+    }
+
+    const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+    consola.success(
+        `✅ Done in ${elapsedSec}s. Removed ${totalDeleted.toLocaleString('en-US')} record(s) from ${startStr} to ${endStr}.`,
+    );
+    process.exit(0);
+}
+
 async function main() {
     consola.box('Remnawave Rescue CLI v0.4');
 
@@ -349,6 +619,11 @@ async function main() {
                 hint: 'Remove all users traffic statistics data from the database',
             },
             {
+                value: CLI_ACTIONS.DELETE_USERS_USAGE_BY_DATE_RANGE,
+                label: 'Delete Users Usage by date range',
+                hint: 'Remove traffic statistics for a period (day-month-year); choose single or batched',
+            },
+            {
                 value: CLI_ACTIONS.EXIT,
                 label: 'Exit',
             },
@@ -377,6 +652,9 @@ async function main() {
             break;
         case CLI_ACTIONS.TRUNCATE_USERS_USAGE_TABLE:
             await truncateUsersUsageTable();
+            break;
+        case CLI_ACTIONS.DELETE_USERS_USAGE_BY_DATE_RANGE:
+            await deleteUsersUsageByDateRange();
             break;
         case CLI_ACTIONS.EXIT:
             consola.info('👋 Exiting...');
