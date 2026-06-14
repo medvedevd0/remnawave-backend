@@ -45,9 +45,9 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
-    "@bull-board/api": "7.1.5",
-    "@bull-board/express": "7.1.5",
-    "@bull-board/nestjs": "7.1.5",
+    "@bull-board/api": "8.0.0",
+    "@bull-board/express": "8.0.0",
+    "@bull-board/nestjs": "8.0.0",
     "@grammyjs/parse-mode": "1.11.1",
     "@kastov/cryptohapp": "^1.1.2",
     "@kastov/grammy-nestjs": "0.4.2",
@@ -87,8 +87,8 @@
     "@willsoto/nestjs-prometheus": "^6.1.0",
     "age-encryption": "^0.3.0",
     "arctic": "^3.7.0",
-    "axios": "^1.16.1",
-    "bullmq": "5.77.6",
+    "axios": "^1.18.0",
+    "bullmq": "5.78.1",
     "chalk": "^5.6.2",
     "class-transformer": "^0.5.1",
     "compression": "^1.8.1",
