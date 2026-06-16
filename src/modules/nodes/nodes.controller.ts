@@ -6,10 +6,9 @@ import {
     ApiCreatedResponse,
     ApiOkResponse,
     ApiParam,
-    ApiQuery,
     ApiTags,
 } from '@nestjs/swagger';
-import { Body, Controller, HttpStatus, Param, Query, UseFilters, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpStatus, Param, UseFilters, UseGuards } from '@nestjs/common';
 
 import { HttpExceptionFilter } from '@common/exception/http-exception.filter';
 import { JwtDefaultGuard } from '@common/guards/jwt-guards/def-jwt-guard';
@@ -60,7 +59,7 @@ import {
     RestartAllNodesRequestBodyDto,
     RestartAllNodesResponseDto,
     RestartNodeRequestDto,
-    RestartNodeRequestQueryDto,
+    RestartNodeRequestBodyDto,
     RestartNodeResponseDto,
     UpdateNodeRequestDto,
     UpdateNodeResponseDto,
@@ -218,16 +217,15 @@ export class NodesController {
         description: 'Node restarted',
     })
     @ApiParam({ name: 'uuid', type: String, description: 'Node UUID' })
-    @ApiQuery({ name: 'force', type: Boolean, description: 'Force restart' })
     @Endpoint({
         command: RestartNodeCommand,
         httpCode: HttpStatus.OK,
     })
     async restartNode(
         @Param() uuid: RestartNodeRequestDto,
-        @Query() query: RestartNodeRequestQueryDto,
+        @Body() body: RestartNodeRequestBodyDto,
     ): Promise<RestartNodeResponseDto> {
-        const res = await this.nodesService.restartNode(uuid.uuid, query.force);
+        const res = await this.nodesService.restartNode(uuid.uuid, body.forceRestart);
         const data = errorHandler(res);
         return {
             response: data,

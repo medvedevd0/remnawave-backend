@@ -19,15 +19,11 @@ export namespace RestartNodeCommand {
 
     export type Request = z.infer<typeof RequestSchema>;
 
-    export const RequestQuerySchema = z.object({
-        force: z
-            .string()
-            .transform((str) => str === 'true')
-            .optional()
-            .default('true'),
+    export const RequestBodySchema = z.object({
+        forceRestart: z.boolean(),
     });
 
-    export type RequestQuery = z.infer<typeof RequestQuerySchema>;
+    export type RequestBody = z.infer<typeof RequestBodySchema>;
 
     export const ResponseSchema = z.object({
         response: z.object({
