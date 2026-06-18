@@ -46,7 +46,7 @@ import {
 } from './interfaces';
 import { override, toNonEmptyRecord } from './utils';
 
-interface IResolveProxyConfigOptions {
+export interface IResolveProxyConfigOptions {
     subscriptionSettings: SubscriptionSettingsEntity | null;
     hosts: HostWithRawInbound[];
     user: UserEntity;
